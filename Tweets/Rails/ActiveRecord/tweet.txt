@@ -1,0 +1,287 @@
+Super charged Plain Old Ruby Object(PORO) with Active Model.
+
+
+
+Simple Car class which does not inherit from active record. Cannot create a new object by
+with hash of attributes
+We can assign value each
+attribute one by one but we cannot instantiate object by passing hash
+
+class Car
+  attr_accessor :make, :model, :year, :color
+  def paint(new_color)
+    self.color = new_color
+  end
+end
+
+# => Car.new(make: "Toyota", model: "Camry", year: 2022, color: "Black")
+# (irb):29:in `initialize': wrong number of arguments (given 1, expected 0) (ArgumentError
+
+ActiveModel::Attributes
+you can assign hash of attributes to new method, initialize method takes an
+arguments then calls the assign_attributes on our car object with that hash
+
+class Car
+  include ActiveModel::AttributeAssignment  
+  attr_accessor :make, :model, :year, :color
+  
+  def initialize(attributes)
+    assign_attributes(attributes) if attributes
+    super()
+  end
+
+  def paint(new_color)
+    self.color = new_color
+  end
+end
+
+car= Car.new(make: "Toyota", model: "Camry", year: 2022, color: "Black")
+=> #<Car:0x000000011043e4a8 @color="Black", @make="Toyota", @model="Camry", @year=2022>
+
+Active Model Callbacks: You can implement callbacks before, after and around certain event
+Below eg. we do callbacks on new_paint event 
+
+class Car
+  include ActiveModel::AttributeAssignment
+  extend ActiveModel::Callbacks
+
+  define_model_callbacks :new_paint
+
+  before_new_paint :keep_it_waxed
+  after_new_paint :notify_dmv
+
+  def initialize(attributes = {})
+    assign attributes(attributes) if attributes
+    super()
+  end
+
+  def paint (new_color)
+    run_callbacks :new_paint do
+      Rails.logger.info "Painting the car #(new color)"
+      self.color = new color
+    end
+  end
+  
+  private
+  def keep_it waxed
+    Rails.logger.warn "Be sure to keep your new paint job waxed!"
+  end
+
+  def notify_dmv
+    Rails.logger.warn "Be sure to notify the DMV about this color change!"
+  end
+end
+
+3.1.0 :191 > car = Car.new(make: "Toyota", model: "Camry", year: 2022, color: "Black")
+ => #<Car:0x0000000106ddb4e8 @color="Black", @make="Toyota", @model="Camry", @year=2022>
+3.1.0 :192 > car.paint("green")
+Be sure to keep your new paint job waxed!
+Painting the car green
+Be sure to notify the DMV about this color change!
+ => "green"
+
+
+ActiveModel::Dirty
+help us to keep track of which attributes have changed. We keep track of color
+attribute by using define_attribute_methods.On new color change we call color_will_change!
+method. After notifying DMV we call changes_applied, which clears the changes and move changes to previous state. 
+
+class Car
+  include ActiveModel::AttributeAssignment
+  extend ActiveModel::Callbacks
+  include ActiveModel::Dirty
+
+  attr_accessor :make, :model, :year, :color
+
+  define_attribute_methods :color
+  define_model_callbacks :paint
+
+  before_paint :keep_it_waxed
+  after_paint :notify_dmv, if: :color_changed?
+
+  def initialize(attributes = {})
+    assign_attributes(attributes) if attributes
+
+    super()
+  end
+
+  def paint(new_color)
+    run_callbacks :paint do
+      Rails.logger.info "Painting the car #{new_color}"
+      color_will_change! if color != new_color
+      self.color = new_color
+    end
+  end
+
+
+  private
+
+  def keep_it_waxed
+    Rails.logger.warn "Be sure to keep your new paint job waxed!"
+  end
+
+  def notify_dmv
+    Rails.logger.warn "Be sure to notify the DMV about this color change!"
+    changes_applied
+  end
+end
+
+3.1.0 :283 > car = Car.new(make: "Toyota", model: "Camry", year: 2022, color: "Black")
+ => #<Car:0x000000010710a010 @color="Black", @make="Toyota", @model="Camry", @year=2022>
+3.1.0 :284 > car.paint("Black")
+Be sure to keep your new paint job waxed!
+Painting the car Black
+ => "Black"
+3.1.0 :285 > car.paint("white")
+Be sure to keep your new paint job waxed!
+Painting the car white
+Be sure to notify the DMV about this color change!
+ => "white"
+
+try comment out the changes_applied line and run the program again you will see 
+something like below. Even after painting the same color we are notifying to DMV 
+because the state is not rollbacked
+3.1.0 :326 > car = Car.new(make: "Toyota", model: "Camry", year: 2022, color: "Black")
+ => #<Car:0x0000000106fb9cb0 @color="Black", @make="Toyota", @model="Camry", @year=2022>
+3.1.0 :327 > car.paint("Black")
+Be sure to keep your new paint job waxed!
+Painting the car Black
+ => "Black"
+3.1.0 :328 > car.changed?
+ => false
+3.1.0 :329 > car.paint("Green")
+Be sure to keep your new paint job waxed!
+Painting the car Greent
+Be sure to notify the DMV about this color change!
+ => "Green"
+3.1.0 :330 > car.changed?
+ => true
+3.1.0 :331 > car.paint("Green")
+Be sure to keep your new paint job waxed!
+Painting the car Greent
+Be sure to notify the DMV about this color change!
+ => "Green"
+3.1.0 :332 > car.changed?
+ => true
+3.1.0 :333 >
+
+
+
+ActiveModel::Validations
+If you are familiar with rails basic you must have used validations in model.
+In this eg we validates presence of make, model, year and color attributes while creating
+the object and year should be greater than 1885 and less than current year 
+
+class Car
+  include ActiveModel::AttributeAssignment
+  include ActiveModel::Dirty
+  include ActiveModel::Validations
+
+  attr_accessor :make, :model, :year, :color
+
+  validates :make, :model, :year, :color, presence: true
+  validates :year, numericality: { only_integer: true, greater_than: 1885, less_than: Time.zone.now.year.to_i + 1 }
+
+  define_attribute_methods :color
+  define_model_callbacks :paint
+
+  before_paint :keep_it_waxed
+  after_paint :notify_dmv, if: :color_changed?
+
+  def initialize(attributes = {})
+    assign_attributes(attributes) if attributes
+
+    super()
+  end
+
+  def paint(new_color)
+    run_callbacks :paint do
+      Rails.logger.info "Painting the car #{new_color}"
+      color_will_change! if color != new_color
+      self.color = new_color
+    end
+  end
+
+
+  private
+
+  def keep_it_waxed
+    Rails.logger.warn "Be sure to keep your new paint job waxed!"
+  end
+
+  def notify_dmv
+    Rails.logger.warn "Be sure to notify the DMV about this color change!"
+    changes_applied
+  end
+end
+
+3.1.0 :421 > car = Car.new(make: "Toyota", model: "Camry", year: 2022, color: "Black")
+ => #<Car:0x00000001070b9f70 @color="Black", @make="Toyota", @model="Camry", @year=2022>
+3.1.0 :422 > car.valid?
+ => true
+3.1.0 :423 > car = Car.new(make: "Tesla", model: "Roadster 2.0", year: 2023, color: "Black")
+ => #<Car:0x0000000106942738 @color="Black", @make="Tesla", @model="Roadster 2.0", @year=2023>
+3.1.0 :424 > car.valid?
+ => false
+3.1.0 :425 > car.errors
+ => #<ActiveModel::Errors [#<ActiveModel::Error attribute=year, type=less_than, options={:value=>2023, :count=>2023}>]>
+3.1.0 :426 > car.errors.full_messages
+ => ["Year must be less than 2023"]
+3.1.0 :427 > car.errors.full_messages.to_sentence
+ => "Year must be less than 2023"
+
+ActiveModel::Model
+Till now we have used active record functionality but for our class to work more with
+action pack and action view. i.e our active record car instance to work with path helper_method, form objects
+and render call. We need to use active model. we removed AttributeAssignment, Validations and
+initialize method
+
+class Car
+  include ActiveModel::Dirty
+  include ActiveModel::Model
+
+  attr_accessor :make, :model, :year, :color
+
+  validates :make, :model, :year, :color, presence: true
+  validates :year, numericality: { only_integer: true, greater_than: 1885, less_than: Time.zone.now.year.to_i + 1 }
+
+  define_attribute_methods :color
+  define_model_callbacks :paint
+
+  before_paint :keep_it_waxed
+  after_paint :notify_dmv, if: :color_changed?
+
+  def paint(new_color)
+    run_callbacks :paint do
+      Rails.logger.info "Painting the car #{new_color}"
+
+      color_will_change! if color != new_color
+      self.color = new_color
+    end
+  end
+
+  private
+
+  def keep_it_waxed
+    Rails.logger.warn "Be sure to keep your new paint job waxed!"
+  end
+
+  def notify_dmv
+    Rails.logger.warn "Be sure to notify the DMV about this color change!"
+    changes_applied
+  end
+end
+
+car = Car.new(make: "Toyota", model: "Camry", year: 2022, color: "Black")
+=> car.model_name
+#<ActiveModel::Name:0x000000010770bf68 @collection="cars", @element="car", @human="Car", @i18n_key=:car, @klass=Car, @name="Car", @param_key="car", @plural="cars", @route_key="cars", @singular="car", @singular_route_key="car", @uncountable=false>
+
+You can use all these functionality in your ruby project just by installing activemodel gem
+Examples from Beginner Rails 
+
+Liked the thread and want more
+- Web Development
+- Devops
+
+
+follow @_rshiva
